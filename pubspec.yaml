@@ -11,7 +11,7 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.0
-  agora_rtc_engine: ^1.0.12
+  agora_rtc_engine: ^3.2.1
   permission_handler: ^5.0.1
   screenshot_and_share: ^0.0.1
   http: ^0.12.2 # for receiving token from server

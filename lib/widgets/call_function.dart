@@ -3,7 +3,9 @@ import 'dart:math';
 
 import 'package:agora_token_example/utils/config.dart';
 import 'package:flutter/material.dart';
-import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:agora_rtc_engine/rtc_engine.dart';
+import 'package:agora_rtc_engine/rtc_local_view.dart' as RtcLocalView;
+import 'package:agora_rtc_engine/rtc_remote_view.dart' as RtcRemoteView;
 import 'package:http/http.dart' as http;
 
 class VideoCall extends StatefulWidget {
@@ -19,14 +21,16 @@ class _VideoCallState extends State<VideoCall> {
   int uid;
   String token;
   bool isLoading;
+  RtcEngine _engine;
+  bool muted;
 
   @override
   void dispose() {
     // clear users
     _users.clear();
     // destroy sdk
-    AgoraRtcEngine.leaveChannel();
-    AgoraRtcEngine.destroy();
+    _engine.leaveChannel();
+    _engine.destroy();
     super.dispose();
   }
 
@@ -62,12 +66,10 @@ class _VideoCallState extends State<VideoCall> {
         token = null;
       });
 
-      showDialog(
-          context: context,
-          child: new AlertDialog(
-            title: new Text("Failed to receive token from the server."),
-            content: new Text("Please retry after sometime."),
-          ));
+      AlertDialog(
+        title: new Text("Failed to receive token from the server."),
+        content: new Text("Please retry after sometime."),
+      );
     }
     initialize();
     setState(() {
@@ -94,82 +96,83 @@ class _VideoCallState extends State<VideoCall> {
     await _initAgoraRtcEngine();
     _addAgoraEventHandlers();
 
-    await AgoraRtcEngine.enableWebSdkInteroperability(true);
-    await AgoraRtcEngine.setParameters(
+    // await _engine.enableWebSdkInteroperability(true);
+    await _engine.setParameters(
         '''{\"che.video.lowBitRateStreamParameter\":{\"width\":320,\"height\":180,\"frameRate\":15,\"bitRate\":140}}''');
 
-    await AgoraRtcEngine.joinChannel(token, widget.channelName, null, uid);
+    await _engine.joinChannel(token, widget.channelName, null, uid);
   }
 
   /// Add agora sdk instance and initialize
   Future<void> _initAgoraRtcEngine() async {
-    await AgoraRtcEngine.create(APP_ID);
-    await AgoraRtcEngine.enableVideo();
+    _engine = await RtcEngine.create(APP_ID);
+    await _engine.enableVideo();
+  }
+
+  void toggleMute() {
+    setState(() {
+      muted = !muted;
+    });
+    _engine.muteLocalAudioStream(muted);
+  }
+
+  void toggleCamera() {
+    _engine.switchCamera();
+  }
+
+  void disconnectCall() {
+    Navigator.pop(context);
   }
 
   /// agora event handlers
   void _addAgoraEventHandlers() {
-    AgoraRtcEngine.onError = (dynamic code) {
-      setState(() {
-        final info = 'onError: $code';
-        _infoStrings.add(info);
-      });
-    };
-
-    /// Use this function to obtain the uid of the person who joined the channel
-    AgoraRtcEngine.onJoinChannelSuccess = (
-      String channel,
-      int uid,
-      int elapsed,
-    ) {
-      setState(() {
-        final info = 'onJoinChannel: $channel, uid: $uid';
-        _infoStrings.add(info);
-      });
-    };
-
-    AgoraRtcEngine.onLeaveChannel = () {
-      setState(() {
-        _infoStrings.add('onLeaveChannel');
-        _users.clear();
-      });
-    };
-
-    AgoraRtcEngine.onUserJoined = (int uid, int elapsed) {
-      setState(() {
-        final info = 'userJoined: $uid';
-        _infoStrings.add(info);
-        _users.add(uid);
-      });
-    };
-
-    AgoraRtcEngine.onUserOffline = (int uid, int reason) {
-      setState(() {
-        final info = 'userOffline: $uid';
-        _infoStrings.add(info);
-        _users.remove(uid);
-      });
-    };
-
-    AgoraRtcEngine.onFirstRemoteVideoFrame = (
-      int uid,
-      int width,
-      int height,
-      int elapsed,
-    ) {
-      setState(() {
-        final info = 'firstRemoteVideo: $uid ${width}x $height';
-        _infoStrings.add(info);
-      });
-    };
+    _engine.setEventHandler(RtcEngineEventHandler(
+      error: (code) {
+        setState(() {
+          final info = 'onError: $code';
+          _infoStrings.add(info);
+        });
+      },
+      joinChannelSuccess: (channel, uid, elapsed) {
+        setState(() {
+          final info = 'onJoinChannel: $channel, uid: $uid';
+          _infoStrings.add(info);
+        });
+      },
+      leaveChannel: (stats) {
+        setState(() {
+          _infoStrings.add('onLeaveChannel');
+          _users.clear();
+        });
+      },
+      userJoined: (uid, elapsed) {
+        setState(() {
+          final info = 'userJoined: $uid';
+          _infoStrings.add(info);
+          _users.add(uid);
+        });
+      },
+      userOffline: (uid, reason) {
+        setState(() {
+          final info = 'userOffline: $uid , reason: $reason';
+          _infoStrings.add(info);
+          _users.remove(uid);
+        });
+      },
+      firstRemoteVideoFrame: (uid, width, height, elapsed) {
+        setState(() {
+          final info = 'firstRemoteVideoFrame: $uid';
+          _infoStrings.add(info);
+        });
+      },
+    ));
   }
 
   /// Helper function to get list of native views
   List<Widget> _getRenderViews() {
-    final List<AgoraRenderWidget> list = [
-      AgoraRenderWidget(0, local: true, preview: true),
-    ];
-    _users.forEach((int uid) => list.add(AgoraRenderWidget(uid)));
+    final List<StatefulWidget> list = [];
+    list.add(RtcLocalView.SurfaceView());
+    _users.forEach((int uid) => list.add(RtcRemoteView.SurfaceView(uid: uid)));
     return list;
   }
 
@@ -268,6 +271,50 @@ class _VideoCallState extends State<VideoCall> {
           ? CircularProgressIndicator()
           : Stack(
               children: <Widget>[
+                Positioned(
+                  bottom: 10,
+                  left: 60,
+                  child: Container(
+                    height: 50,
+                    width: 300,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: <Widget>[
+                        CircleAvatar(
+                          backgroundColor: Colors.blue,
+                          child: IconButton(
+                            icon: muted
+                                ? Icon(
+                                    Icons.mic_off,
+                                    color: Colors.white,
+                                  )
+                                : Icon(Icons.mic, color: Colors.white),
+                            onPressed: toggleMute,
+                          ),
+                        ),
+                        CircleAvatar(
+                            backgroundColor: Colors.red,
+                            child: IconButton(
+                              icon: Icon(
+                                Icons.call_end,
+                                color: Colors.white,
+                              ),
+                              onPressed: disconnectCall,
+                            )),
+                        CircleAvatar(
+                            backgroundColor: Colors.blue,
+                            radius: 20,
+                            child: IconButton(
+                              icon: Icon(
+                                Icons.switch_camera,
+                                color: Colors.white,
+                              ),
+                              onPressed: toggleCamera,
+                            )),
+                      ],
+                    ),
+                  ),
+                ),
                 _viewRows(),
                 _panel(),
               ],
